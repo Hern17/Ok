@@ -1,0 +1,11 @@
+[project]
+name = "talentmatch"
+version = "1.0.0"
+description = "TalentMatch AI - 3-Role Talent Ecosystem"
+dependencies = [
+    "flask>=3.0.0",
+    "werkzeug>=3.0.0",
+    "pyyaml>=6.0",
+    "pypdf2>=3.0.0",
+]
+requires-python = ">=3.10"
