@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="dashboard">
+  <h2 class="section-title">▸ SWIPE HISTORY</h2>
+  {% if swipes %}
+  <div class="entry-list">
+    {% for s in swipes %}
+    <div class="entry-card pixel-border">
+      <div class="entry-header">
+        <a href="{{ url_for('profile', username=s.username) }}"><span class="entry-title">{{ s.avatar or '🧑' }} {{ s.username }}</span></a>
+        <span class="entry-badge" style="{% if s.action == 'accepted' %}color:var(--green);border-color:var(--green){% else %}color:var(--red);border-color:var(--red){% endif %}">{{ s.action | upper }}</span>
+      </div>
+      <div class="entry-duration">Lv.{{ s.level }} {{ s.char_class }}</div>
+      <div class="entry-tags">{% set sk = s.skills | from_json if s.skills else [] %}{% for skl in sk[:6] %}<span class="mini-tag">{{ skl }}</span>{% endfor %}</div>
+      <div class="entry-duration" style="margin-top:4px">{{ s.created_at[:10] }}</div>
+      <form method="POST" action="{{ url_for('employer_history_revert', swipe_id=s.swipe_id) }}" style="margin-top:6px" onsubmit="return confirm('Revert this swipe? Candidate will reappear in match deck.')">
+        <button class="pixel-btn pixel-border btn-small btn-danger">↩ Revert</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="section-card pixel-border">
+    <p class="empty-state">No swipes yet. Start matching from your dashboard!</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

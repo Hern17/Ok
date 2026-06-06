@@ -23,7 +23,7 @@
           <div class="xp-fill" style="width:{{ (profile.xp / profile.xp_to_next * 100) if profile.xp_to_next else 0 }}%"></div>
         </div>
       </div>
-      {% if session.user_id != p_user_id %}
+      {% if session.user_id != p_user_id and not is_employer_view %}
       <div class="friend-action">
         {% if is_friend %}
         <form method="POST" action="{{ url_for('friend_remove', friend_id=p_user_id) }}">
@@ -34,7 +34,7 @@
         {% endif %}
       </div>
       {% endif %}
-      {% if is_own %}
+      {% if is_own and not is_employer_view %}
       <div class="avatar-controls">
         <button class="pixel-btn pixel-border btn-small" onclick="showAvatarPicker()">Change Avatar</button>
         <div id="avatar-picker" style="display:none;margin-top:8px">

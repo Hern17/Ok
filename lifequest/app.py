@@ -12,11 +12,13 @@ app.template_folder = "templates"
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 AVATAR_FOLDER = os.path.join(UPLOAD_FOLDER, "avatars")
 QUEST_PROOF_FOLDER = os.path.join(UPLOAD_FOLDER, "quest_proofs")
+CV_PROOF_FOLDER = os.path.join(UPLOAD_FOLDER, "cv_proofs")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(AVATAR_FOLDER, exist_ok=True)
 os.makedirs(QUEST_PROOF_FOLDER, exist_ok=True)
+os.makedirs(CV_PROOF_FOLDER, exist_ok=True)
 
-from ai_extractor import extract_cv, process_text_entry, CLASS_MAP
+from ai_extractor import extract_cv, process_text_entry, validate_cv_proof, CLASS_MAP
 from game_mechanics import (
     check_level_up, are_friends, get_friends, count_friends,
     get_friend_requests_incoming, get_friend_requests_outgoing,
@@ -29,13 +31,27 @@ def from_json(value):
     return json.loads(value) if value else []
 
 from db import get_db, init_db
-from auth import login_required, login_user, register_user
+from auth import login_required, employer_required, login_user, register_user
 
 init_db()
+
+@app.context_processor
+def inject_unread():
+    if "user_id" in session and session.get("role") == "candidate":
+        conn = get_db()
+        count = conn.execute(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND read = 0",
+            (session["user_id"],),
+        ).fetchone()[0]
+        conn.close()
+        return {"unread_notifications": count}
+    return {"unread_notifications": 0}
 
 @app.route("/")
 def index():
     if "user_id" in session:
+        if session.get("role") == "employer":
+            return redirect(url_for("employer_dashboard"))
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
 
@@ -43,6 +59,8 @@ def index():
 def login():
     if request.method == "POST":
         if login_user(request.form["username"], request.form["password"]):
+            if session.get("role") == "employer":
+                return redirect(url_for("employer_dashboard"))
             return redirect(url_for("dashboard"))
         flash("Invalid credentials", "danger")
     return render_template("login.html")
@@ -50,13 +68,21 @@ def login():
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
+        role = request.form.get("role", "candidate")
         avatar = request.form.get("avatar", "").strip()
         success, msg = register_user(
             request.form["username"], request.form["email"], request.form["password"],
-            avatar
+            avatar=avatar, role=role,
+            company_name=request.form.get("company_name", ""),
+            industry=request.form.get("industry", ""),
+            website=request.form.get("website", ""),
+            contact_email=request.form.get("contact_email", ""),
         )
         if success:
             login_user(request.form["username"], request.form["password"])
+            if role == "employer":
+                flash("Company registered! Welcome to LifeQuest.", "success")
+                return redirect(url_for("employer_dashboard"))
             flash("Welcome to LifeQuest!", "success")
             return redirect(url_for("dashboard"))
         flash(msg, "danger")
@@ -114,6 +140,7 @@ def profile(username):
     completed = sum(1 for q in quests if q.get("status") == "completed")
     p_avatar = profile["avatar"] if profile and profile["avatar"] else "🧑"
     is_own = uid == user["id"]
+    is_employer_view = session.get("role") == "employer"
     conn.close()
     return render_template(
         "profile.html",
@@ -124,6 +151,7 @@ def profile(username):
         p_friend_count=p_friend_count,
         p_avatar=p_avatar,
         is_own=is_own,
+        is_employer_view=is_employer_view,
         quests_completed=completed,
     )
 
@@ -297,8 +325,27 @@ def cv_upload():
 @login_required
 def cv_add_entry():
     text = request.form.get("text", "").strip()
+    proof = request.form.get("proof", "").strip()
     if not text:
         return jsonify({"error": "No text provided"}), 400
+    if not proof:
+        return jsonify({"error": "Proof of work required"}), 400
+
+    # Validate via DeepSeek
+    validation = validate_cv_proof(text, proof)
+    if validation and not validation.get("pass"):
+        return jsonify({"error": f"Proof rejected: {validation.get('reason', 'Insufficient evidence')}"}), 400
+
+    # Handle proof file
+    proof_file = ""
+    if "proof_file" in request.files:
+        f = request.files["proof_file"]
+        if f.filename:
+            ext = os.path.splitext(f.filename)[1].lower()
+            if ext in {".pdf", ".png", ".jpg", ".jpeg"}:
+                filename = f"{session['user_id']}_cv_{secure_filename(f.filename)}"
+                f.save(os.path.join(CV_PROOF_FOLDER, filename))
+                proof_file = filename
 
     try:
         result = process_text_entry(text)
@@ -307,6 +354,9 @@ def cv_add_entry():
 
     section_type = result.get("section_type", "projects")
     entry = result.get("entry", {})
+    if proof_file:
+        entry["proof_file"] = proof_file
+    entry["proof"] = proof
     new_skills = result.get("skills_extracted", [])
 
     uid = session["user_id"]
@@ -433,6 +483,347 @@ def quest_history():
 @app.route("/uploads/<path:filename>")
 def serve_upload(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
+
+# ── Employer routes ──
+
+def _get_employer(uid):
+    conn = get_db()
+    emp = conn.execute("SELECT * FROM employers WHERE user_id = ?", (uid,)).fetchone()
+    conn.close()
+    return dict(emp) if emp else None
+
+def _candidate_skills_intersect(conn, candidate_id, employer_id):
+    """Check if candidate has skills matching any open job from employer."""
+    profile = conn.execute("SELECT skills FROM player_profiles WHERE user_id = ?", (candidate_id,)).fetchone()
+    if not profile:
+        return False
+    cand_skills = set(json.loads(profile["skills"]) if profile["skills"] else [])
+    if not cand_skills:
+        return False
+    jobs = conn.execute(
+        "SELECT skills_required FROM job_listings WHERE employer_id = ? AND status = 'open'",
+        (employer_id,),
+    ).fetchall()
+    for j in jobs:
+        req = set(json.loads(j["skills_required"]) if j["skills_required"] else [])
+        if req and cand_skills & req:
+            return True
+    return False
+
+def _relevant_candidates(conn, employer_id):
+    """Return candidates whose skills intersect any open job's requirements."""
+    candidates = conn.execute(
+        """SELECT u.id, u.username, p.level, p.char_class, p.skills, p.avatar
+        FROM users u JOIN player_profiles p ON u.id = p.user_id
+        WHERE u.role = 'candidate'"""
+    ).fetchall()
+    swiped = set(
+        row["candidate_id"] for row in conn.execute(
+            "SELECT candidate_id FROM employer_swipes WHERE employer_id = ?", (employer_id,)
+        ).fetchall()
+    )
+    result = []
+    for c in candidates:
+        if c["id"] in swiped:
+            continue
+        cand_skills = set(json.loads(c["skills"]) if c["skills"] else [])
+        if not cand_skills:
+            continue
+        jobs = conn.execute(
+            "SELECT skills_required FROM job_listings WHERE employer_id = ? AND status = 'open'",
+            (employer_id,),
+        ).fetchall()
+        for j in jobs:
+            req = set(json.loads(j["skills_required"]) if j["skills_required"] else [])
+            if req and cand_skills & req:
+                match_pct = int(len(cand_skills & req) / len(req) * 100) if req else 0
+                result.append(dict(c) | {"match_pct": match_pct})
+                break
+    return result
+
+@app.route("/employer")
+@login_required
+@employer_required
+def employer_dashboard():
+    uid = session["user_id"]
+    emp = _get_employer(uid)
+    conn = get_db()
+    jobs = conn.execute(
+        "SELECT * FROM job_listings WHERE employer_id = ? ORDER BY created_at DESC",
+        (emp["id"],),
+    ).fetchall()
+    candidates = _relevant_candidates(conn, emp["id"])
+    conn.close()
+    return render_template(
+        "employer_dashboard.html",
+        employer=emp,
+        jobs=[dict(j) for j in jobs],
+        candidates=candidates,
+        username=session["username"],
+    )
+
+@app.route("/employer/job/create", methods=["POST"])
+@login_required
+@employer_required
+def employer_job_create():
+    emp = _get_employer(session["user_id"])
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO job_listings (employer_id, title, description, skills_required, location, salary_range)
+        VALUES (?, ?, ?, ?, ?, ?)""",
+        (emp["id"], request.form["title"], request.form.get("description", ""),
+         request.form.get("skills", "[]"), request.form.get("location", ""),
+         request.form.get("salary", "")),
+    )
+    conn.commit()
+    conn.close()
+    flash("Job posted!", "success")
+    return redirect(url_for("employer_dashboard"))
+
+@app.route("/employer/job/<int:job_id>/close", methods=["POST"])
+@login_required
+@employer_required
+def employer_job_close(job_id):
+    conn = get_db()
+    conn.execute("UPDATE job_listings SET status = 'closed' WHERE id = ?", (job_id,))
+    conn.commit()
+    conn.close()
+    flash("Job closed", "info")
+    return redirect(url_for("employer_dashboard"))
+
+@app.route("/employer/job/<int:job_id>/delete", methods=["POST"])
+@login_required
+@employer_required
+def employer_job_delete(job_id):
+    conn = get_db()
+    conn.execute("DELETE FROM job_listings WHERE id = ?", (job_id,))
+    conn.commit()
+    conn.close()
+    flash("Job deleted", "info")
+    return redirect(url_for("employer_dashboard"))
+
+@app.route("/employer/search")
+@login_required
+@employer_required
+def employer_search():
+    q = request.args.get("q", "").strip()
+    if not q:
+        return jsonify({"results": []})
+    conn = get_db()
+    if q.isdigit():
+        rows = conn.execute(
+            """SELECT u.id, u.username, p.level, p.char_class, p.skills, p.title, p.avatar
+            FROM users u JOIN player_profiles p ON u.id = p.user_id
+            WHERE u.role = 'candidate' AND u.id = ?""",
+            (int(q),),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT u.id, u.username, p.level, p.char_class, p.skills, p.title, p.avatar
+            FROM users u JOIN player_profiles p ON u.id = p.user_id
+            WHERE u.role = 'candidate' AND u.username LIKE ?""",
+            (f"%{q}%",),
+        ).fetchall()
+    conn.close()
+    results = []
+    for r in rows:
+        d = dict(r)
+        sk = json.loads(d["skills"]) if d["skills"] else []
+        d["skills"] = sk[:6]
+        results.append(d)
+    return jsonify({"results": results})
+
+@app.route("/employer/swipe/<int:candidate_id>/<action>", methods=["POST"])
+@login_required
+@employer_required
+def employer_swipe(candidate_id, action):
+    if action not in ("accepted", "rejected"):
+        return jsonify({"error": "Invalid action"}), 400
+    emp = _get_employer(session["user_id"])
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO employer_swipes (employer_id, candidate_id, action) VALUES (?, ?, ?)",
+            (emp["id"], candidate_id, action),
+        )
+        conn.commit()
+    except Exception:
+        conn.close()
+        return jsonify({"error": "Already swiped"}), 400
+    conn.close()
+    return jsonify({"success": True, "action": action})
+
+@app.route("/employer/matches")
+@login_required
+@employer_required
+def employer_matches():
+    emp = _get_employer(session["user_id"])
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT es.candidate_id, u.username, p.level, p.char_class, p.skills, p.title, p.avatar
+        FROM employer_swipes es
+        JOIN users u ON es.candidate_id = u.id
+        JOIN player_profiles p ON u.id = p.user_id
+        WHERE es.employer_id = ? AND es.action = 'accepted'
+        ORDER BY es.created_at DESC""",
+        (emp["id"],),
+    ).fetchall()
+    jobs = conn.execute(
+        "SELECT id, title FROM job_listings WHERE employer_id = ? AND status = 'open'",
+        (emp["id"],),
+    ).fetchall()
+    conn.close()
+    return render_template(
+        "employer_matches.html",
+        matches=[dict(r) for r in rows],
+        jobs=[dict(j) for j in jobs],
+        username=session["username"],
+    )
+
+@app.route("/employer/hire/<int:candidate_id>", methods=["POST"])
+@login_required
+@employer_required
+def employer_hire(candidate_id):
+    emp = _get_employer(session["user_id"])
+    job_id = request.form.get("job_id")
+    if not job_id:
+        flash("Select a job", "danger")
+        return redirect(url_for("employer_matches"))
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO hires (job_id, candidate_id, employer_id) VALUES (?, ?, ?)",
+        (job_id, candidate_id, emp["id"]),
+    )
+    conn.execute("UPDATE player_profiles SET xp = xp + 500 WHERE user_id = ?", (candidate_id,))
+    conn.execute(
+        "UPDATE job_listings SET status = 'closed' WHERE id = ?",
+        (job_id,),
+    )
+    conn.commit()
+    check_level_up(conn, candidate_id)
+    conn.execute(
+        """INSERT INTO notifications (user_id, message) VALUES (?, ?)""",
+        (candidate_id, f"🏆 Hired by {emp['company_name']} for {conn.execute('SELECT title FROM job_listings WHERE id = ?', (job_id,)).fetchone()[0]}. +500 XP!"),
+    )
+    conn.close()
+    flash("Candidate hired! +500 XP awarded.", "success")
+    return redirect(url_for("employer_matches"))
+
+@app.route("/employer/profile", methods=["GET", "POST"])
+@login_required
+@employer_required
+def employer_profile():
+    uid = session["user_id"]
+    emp = _get_employer(uid)
+    if request.method == "POST":
+        conn = get_db()
+        conn.execute(
+            """UPDATE employers SET company_name=?, industry=?, website=?, description=?, contact_email=?
+            WHERE user_id=?""",
+            (request.form["company_name"], request.form.get("industry", ""),
+             request.form.get("website", ""), request.form.get("description", ""),
+             request.form.get("contact_email", ""), uid),
+        )
+        conn.commit()
+        conn.close()
+        flash("Profile updated!", "success")
+        return redirect(url_for("employer_profile"))
+    return render_template("employer_profile.html", employer=emp, username=session["username"])
+
+@app.route("/employer/history")
+@login_required
+@employer_required
+def employer_history():
+    emp = _get_employer(session["user_id"])
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT es.id as swipe_id, es.action, es.created_at,
+        u.id as candidate_id, u.username, p.level, p.char_class, p.skills, p.title, p.avatar
+        FROM employer_swipes es
+        JOIN users u ON es.candidate_id = u.id
+        JOIN player_profiles p ON u.id = p.user_id
+        WHERE es.employer_id = ? ORDER BY es.created_at DESC""",
+        (emp["id"],),
+    ).fetchall()
+    conn.close()
+    return render_template(
+        "employer_history.html",
+        swipes=[dict(r) for r in rows],
+        username=session["username"],
+    )
+
+@app.route("/employer/history/revert/<int:swipe_id>", methods=["POST"])
+@login_required
+@employer_required
+def employer_history_revert(swipe_id):
+    conn = get_db()
+    conn.execute("DELETE FROM employer_swipes WHERE id = ?", (swipe_id,))
+    conn.commit()
+    conn.close()
+    flash("Swipe reverted. Candidate will appear in match deck again.", "info")
+    return redirect(url_for("employer_history"))
+
+@app.route("/jobs")
+@login_required
+def jobs_browse():
+    uid = session["user_id"]
+    conn = get_db()
+    profile = conn.execute("SELECT skills FROM player_profiles WHERE user_id = ?", (uid,)).fetchone()
+    cand_skills = set(json.loads(profile["skills"]) if profile and profile["skills"] else [])
+    rows = conn.execute(
+        """SELECT j.*, e.company_name, e.industry, e.contact_email, e.user_id as emp_user_id
+        FROM job_listings j JOIN employers e ON j.employer_id = e.id
+        WHERE j.status = 'open' ORDER BY j.created_at DESC""",
+    ).fetchall()
+    listings = []
+    for r in rows:
+        j = dict(r)
+        req = set(json.loads(j["skills_required"]) if j["skills_required"] else [])
+        match_pct = int(len(cand_skills & req) / len(req) * 100) if req else 0
+        j["match_pct"] = match_pct
+        listings.append(j)
+    notifs = conn.execute(
+        "SELECT id, message, created_at FROM notifications WHERE user_id = ? AND read = 0 ORDER BY created_at DESC",
+        (uid,),
+    ).fetchall()
+    hires = conn.execute(
+        """SELECT h.*, j.title, e.company_name
+        FROM hires h JOIN job_listings j ON h.job_id = j.id
+        JOIN employers e ON h.employer_id = e.id
+        WHERE h.candidate_id = ? ORDER BY h.created_at DESC""",
+        (uid,),
+    ).fetchall()
+    conn.close()
+    return render_template("jobs_browse.html", jobs=listings, notifications=[dict(n) for n in notifs], hires=[dict(h) for h in hires], username=session["username"])
+
+@app.route("/jobs/notifications/read", methods=["POST"])
+@login_required
+def jobs_notifications_read():
+    uid = session["user_id"]
+    conn = get_db()
+    conn.execute("UPDATE notifications SET read = 1 WHERE user_id = ?", (uid,))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True})
+
+@app.route("/jobs/<int:job_id>")
+@login_required
+def job_detail(job_id):
+    conn = get_db()
+    row = conn.execute(
+        """SELECT j.*, e.company_name, e.industry, e.description as company_desc,
+        e.website, e.contact_email, e.user_id as emp_user_id
+        FROM job_listings j JOIN employers e ON j.employer_id = e.id
+        WHERE j.id = ?""",
+        (job_id,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        flash("Job not found", "danger")
+        return redirect(url_for("jobs_browse"))
+    job = dict(row)
+    job["skills_required"] = json.loads(job["skills_required"]) if job["skills_required"] else []
+    return render_template("job_detail.html", job=job, username=session["username"])
 
 if __name__ == "__main__":
     app.run(debug=True, host="127.0.0.1", port=5000)

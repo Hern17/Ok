@@ -362,6 +362,46 @@ a:hover { color: var(--gold); text-shadow: 0 0 8px var(--gold); }
 .stat-box a .stat-num { color: var(--gold); }
 .stat-box a:hover .stat-num { text-shadow: 0 0 8px var(--gold); }
 
+/* ── ROLE SELECTION ── */
+.role-group { display: flex; gap: 12px; margin-top: 4px; }
+.role-opt { display: flex; align-items: center; gap: 4px; font-size: 8px; color: var(--text); cursor: pointer; }
+.role-opt input { accent-color: var(--green); }
+
+/* ── SWIPE DECK ── */
+.swipe-deck { position: relative; height: 340px; width: 280px; margin: 0 auto; }
+.swipe-card {
+  position: absolute; width: 100%; top: 0; left: 0;
+  background: var(--card-bg); border: 3px solid var(--border);
+  padding: 20px; text-align: center;
+  transition: transform 0.3s, opacity 0.3s;
+}
+.swipe-card:nth-child(1) { transform: rotate(0deg) translateY(0); z-index: 5; }
+.swipe-card:nth-child(2) { transform: rotate(-2deg) translateY(4px); z-index: 4; }
+.swipe-card:nth-child(3) { transform: rotate(2deg) translateY(8px); z-index: 3; }
+.swipe-card:nth-child(4) { transform: rotate(-1deg) translateY(12px); z-index: 2; }
+.swipe-card:nth-child(5) { transform: rotate(1deg) translateY(16px); z-index: 1; }
+.swipe-avatar { font-size: 48px; margin-bottom: 8px; }
+.swipe-name { font-size: 12px; color: var(--gold); margin-bottom: 4px; }
+.swipe-class { font-size: 8px; color: var(--green); margin-bottom: 6px; }
+.swipe-skills { font-size: 7px; color: var(--dim); margin-bottom: 8px; line-height: 1.5; }
+.swipe-match { font-size: 9px; color: var(--text); margin-bottom: 12px; }
+.match-pct { color: var(--gold); font-weight: bold; }
+.swipe-actions { display: flex; justify-content: center; gap: 16px; }
+.swipe-actions .btn-danger { min-width: 50px; }
+.swipe-actions .pixel-btn:not(.btn-danger) { min-width: 50px; }
+
+/* ── SEARCH RESULTS ── */
+#search-results { margin-top: 10px; }
+.search-result-card {
+  background: var(--accent); border: 2px solid var(--border);
+  padding: 10px; margin-bottom: 8px; font-size: 8px;
+  transition: opacity 0.3s;
+}
+.notif-card {
+  background: var(--accent); border: 2px solid var(--border);
+  padding: 10px; margin-bottom: 6px;
+}
+
 @media (max-width: 600px) {
   .player-card { flex-direction: column; text-align: center; }
   .events-grid { grid-template-columns: 1fr; }

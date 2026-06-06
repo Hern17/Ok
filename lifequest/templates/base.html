@@ -12,11 +12,20 @@
   <div class="nav-brand">LQ</div>
   <div class="nav-links">
     {% if session.user_id %}
+      {% if session.get('role') == 'employer' %}
+    <a href="{{ url_for('employer_dashboard') }}">[Home]</a>
+    <a href="{{ url_for('employer_matches') }}">[Recent Match]</a>
+    <a href="{{ url_for('employer_history') }}">[History]</a>
+    <a href="{{ url_for('logout') }}">[Logout]</a>
+    <a href="{{ url_for('employer_profile') }}" class="nav-user">{{ session.username }}</a>
+      {% else %}
     <a href="{{ url_for('dashboard') }}">[Home]</a>
     <a href="{{ url_for('friends_page') }}">[Friends]</a>
     <a href="{{ url_for('quest_history') }}">[Quest Log]</a>
+    <a href="{{ url_for('jobs_browse') }}">[Jobs{% if unread_notifications %} 🔔{{ unread_notifications }}{% endif %}]</a>
     <a href="{{ url_for('logout') }}">[Logout]</a>
     <a href="{{ url_for('profile', username=session.username) }}" class="nav-user">{{ session.username }}</a>
+      {% endif %}
     {% else %}
     <a href="{{ url_for('login') }}">[Login]</a>
     <a href="{{ url_for('signup') }}">[Sign Up]</a>

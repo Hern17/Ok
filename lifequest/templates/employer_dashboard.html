@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="dashboard">
+  <h2 class="section-title">▸ EMPLOYER DASHBOARD</h2>
+  <p class="cv-hint">{{ employer.company_name }} · {{ employer.industry }}</p>
+
+  <div class="section-card pixel-border">
+    <h3 class="section-title">▸ SEARCH CANDIDATES</h3>
+    <form class="inline-form" onsubmit="event.preventDefault(); searchCandidates(this.q.value)">
+      <input type="text" name="q" class="pixel-input pixel-border" placeholder="Search by name or user ID..." required>
+      <button type="submit" class="pixel-btn pixel-border btn-small">🔍</button>
+    </form>
+    <div id="search-results"></div>
+  </div>
+
+  <div class="section-card pixel-border">
+    <h3 class="section-title">▸ POST A JOB</h3>
+    <form method="POST" action="{{ url_for('employer_job_create') }}">
+      <div class="field"><label>Title</label><input type="text" name="title" class="pixel-input pixel-border" required></div>
+      <div class="field"><label>Description</label><textarea name="description" class="pixel-textarea pixel-border" rows="3"></textarea></div>
+      <div class="field"><label>Skills (JSON array)</label><input type="text" name="skills" class="pixel-input pixel-border" placeholder='["Python","SQL"]'></div>
+      <div class="field" style="display:flex;gap:8px">
+        <div style="flex:1"><label>Location</label><input type="text" name="location" class="pixel-input pixel-border"></div>
+        <div style="flex:1"><label>Salary</label><input type="text" name="salary" class="pixel-input pixel-border" placeholder="$80k-120k"></div>
+      </div>
+      <button type="submit" class="pixel-btn pixel-border">▶ POST</button>
+    </form>
+  </div>
+
+  <div class="section-card pixel-border">
+    <h3 class="section-title">▸ YOUR JOBS ({{ jobs|length }})</h3>
+    {% if jobs %}
+    <div class="entry-list">
+      {% for j in jobs %}
+      <div class="entry-card pixel-border">
+        <div class="entry-header">
+          <span class="entry-title">{{ j.title }}</span>
+          <span class="entry-badge">{{ j.status | upper }}</span>
+        </div>
+        {% if j.location %}<div class="entry-duration">📍 {{ j.location }}{% if j.salary_range %} · {{ j.salary_range }}{% endif %}</div>{% endif %}
+        <div class="entry-tags">
+          {% set sk = j.skills_required | from_json if j.skills_required else [] %}
+          {% for s in sk[:4] %}<span class="mini-tag">{{ s }}</span>{% endfor %}
+        </div>
+        <div style="margin-top:6px;display:flex;gap:6px">
+          {% if j.status == 'open' %}
+          <form method="POST" action="{{ url_for('employer_job_close', job_id=j.id) }}" style="display:inline">
+            <button class="pixel-btn pixel-border btn-small">🔒 Close</button>
+          </form>
+          {% endif %}
+          <form method="POST" action="{{ url_for('employer_job_delete', job_id=j.id) }}" style="display:inline" onsubmit="return confirm('Delete this job listing?')">
+            <button class="pixel-btn pixel-border btn-small btn-danger">✗ Delete</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-state">No jobs posted yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="section-card pixel-border">
+    <h3 class="section-title">▸ CANDIDATE MATCH</h3>
+    {% if candidates %}
+    <div class="swipe-deck" id="swipe-deck">
+      {% for c in candidates %}
+      <div class="swipe-card pixel-border" data-uid="{{ c.id }}">
+        <a href="{{ url_for('profile', username=c.username) }}">
+          <div class="swipe-avatar">{{ c.avatar or '🧑' }}</div>
+          <div class="swipe-name">{{ c.username }}</div>
+        </a>
+        <div class="swipe-class">Lv.{{ c.level }} {{ c.char_class }}</div>
+        <div class="swipe-skills">{% set sk = c.skills | from_json if c.skills else [] %}{{ sk[:4] | join(', ') }}</div>
+        <div class="swipe-match">Match: <span class="match-pct">{{ c.match_pct }}%</span></div>
+        <div class="swipe-actions">
+          <button class="pixel-btn pixel-border btn-small btn-danger" onclick="swipe({{ c.id }}, 'rejected')">✗</button>
+          <button class="pixel-btn pixel-border btn-small" onclick="swipe({{ c.id }}, 'accepted')">✓</button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-state">No matching candidates found. Post a job with skill requirements to get matches!</p>
+    {% endif %}
+  </div>
+</div>
+<script>
+async function swipe(uid, action) {
+  const resp = await fetch('/employer/swipe/' + uid + '/' + action, { method: 'POST' });
+  const data = await resp.json();
+  if (data.success) {
+    const card = document.querySelector('.swipe-card');
+    card.style.transform = action === 'accepted'
+      ? 'translateX(200px) rotate(10deg)'
+      : 'translateX(-200px) rotate(-10deg)';
+    card.style.opacity = '0';
+    setTimeout(() => { card.remove(); if (!document.querySelector('.swipe-card')) { document.getElementById('swipe-deck').innerHTML = '<p class="empty-state">No more candidates.</p>'; } }, 300);
+  }
+}
+async function searchCandidates(q) {
+  const box = document.getElementById('search-results');
+  box.innerHTML = '<span class="status-pending">Searching...</span>';
+  const resp = await fetch('/employer/search?q=' + encodeURIComponent(q));
+  const data = await resp.json();
+  if (!data.results || !data.results.length) {
+    box.innerHTML = '<p class="empty-state">No candidates found.</p>';
+    return;
+  }
+  box.innerHTML = data.results.map(c =>
+    '<div class="search-result-card pixel-border">' +
+    '<div style="display:flex;align-items:center;gap:10px">' +
+    '<a href="/profile/' + c.username + '"><span style="font-size:32px">' + (c.avatar || '🧑') + '</span></a>' +
+    '<div style="flex:1"><a href="/profile/' + c.username + '"><strong style="color:var(--gold);font-size:10px">' + c.username + '</strong></a>' +
+    '<div style="font-size:7px;color:var(--green)">Lv.' + c.level + ' ' + c.char_class + '</div>' +
+    '<div style="font-size:7px;color:var(--dim)">' + c.skills.join(', ') + '</div></div>' +
+    '<div style="display:flex;gap:6px">' +
+    '<button class="pixel-btn pixel-border btn-small btn-danger" onclick="quickSwipe(' + c.id + ', \'rejected\', this)">✗</button>' +
+    '<button class="pixel-btn pixel-border btn-small" onclick="quickSwipe(' + c.id + ', \'accepted\', this)">✓</button>' +
+    '</div></div></div>'
+  ).join('');
+}
+async function quickSwipe(uid, action, btn) {
+  const resp = await fetch('/employer/swipe/' + uid + '/' + action, { method: 'POST' });
+  const data = await resp.json();
+  if (data.success) {
+    btn.closest('.search-result-card').style.opacity = '0.4';
+    btn.closest('.search-result-card').querySelectorAll('button').forEach(b => b.disabled = true);
+  }
+}
+</script>
+{% endblock %}

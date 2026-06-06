@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="dashboard">
+  <h2 class="section-title">▸ RECENT MATCHES</h2>
+  {% if matches %}
+  <div class="section-card pixel-border">
+    <div class="entry-list">
+      {% for m in matches %}
+      <div class="entry-card pixel-border">
+        <div class="entry-header">
+          <span class="entry-title">{{ m.avatar or '🧑' }} {{ m.username }}</span>
+          <span class="entry-badge">Lv.{{ m.level }} {{ m.char_class }}</span>
+        </div>
+        <div class="entry-duration">{{ m.title or 'Adventurer' }}</div>
+        <div class="entry-tags">{% set sk = m.skills | from_json if m.skills else [] %}{% for s in sk[:6] %}<span class="mini-tag">{{ s }}</span>{% endfor %}</div>
+        <form method="POST" action="{{ url_for('employer_hire', candidate_id=m.candidate_id) }}" style="margin-top:8px;display:flex;gap:6px;align-items:center">
+          <select name="job_id" class="pixel-input pixel-border" style="flex:1;font-size:7px" required>
+            <option value="">Assign job...</option>
+            {% for j in jobs %}<option value="{{ j.id }}">{{ j.title }}</option>{% endfor %}
+          </select>
+          <button type="submit" class="pixel-btn pixel-border btn-small">🏆 Hire</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <div class="section-card pixel-border">
+    <p class="empty-state">No accepted candidates yet. Swipe right on candidates from your dashboard!</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

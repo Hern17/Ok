@@ -311,6 +311,27 @@ Text: {text[:4000]}""")
     return _mock_process_text(text)
 
 
+def validate_cv_proof(entry_text, proof_text):
+    """Binary pass/fail for CV entry proof. Returns {"pass":bool,"reason":"..."} or None."""
+    if not proof_text.strip():
+        return None
+    try:
+        result = _call_deepseek(
+            "You are a CV entry validator for LifeQuest, an RPG career development game.\n\n"
+            "A user submitted this CV entry and proof. Determine if the proof credibly supports the claim.\n"
+            "- Pass: proof is specific and credible (link, cert name, real detail)\n"
+            "- Fail: proof is vague, irrelevant, or absent of real evidence\n\n"
+            f"CV Entry: {entry_text[:1500]}\n"
+            f"Proof: {proof_text[:1500]}\n\n"
+            'Return JSON only: {"pass": true/false, "reason": "brief explanation"}'
+        )
+        if result and isinstance(result, dict) and "pass" in result:
+            return result
+    except Exception:
+        pass
+    return None
+
+
 def _mock_process_text(text):
     """Heuristic mock fallback for process_text_entry."""
     t = text.lower()

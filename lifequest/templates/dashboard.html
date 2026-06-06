@@ -118,9 +118,11 @@
 
   <div class="cv-section pixel-border">
     <h3 class="section-title">▸ AI TEXT IMPORT</h3>
-    <p class="cv-hint">Paste a project description, GitHub README, certification details, work experience. The AI classifies it automatically.</p>
+    <p class="cv-hint">Paste a project description, GitHub README, certification details, work experience. Proof of work required — DeepSeek verifies your entry.</p>
     <form id="ai-entry-form">
       <textarea name="text" class="pixel-textarea pixel-border" rows="4" placeholder="Paste text here..." required></textarea>
+      <textarea name="proof" class="pixel-textarea pixel-border" rows="2" placeholder="Proof of work (explain evidence: GitHub URL, cert name, portfolio link...)" required></textarea>
+      <input type="file" name="proof_file" accept=".pdf,.png,.jpg,.jpeg" class="pixel-input pixel-border" style="font-size:7px;padding:6px">
       <button type="submit" class="pixel-btn pixel-border">▶ ANALYZE WITH AI</button>
     </form>
     <div id="ai-entry-status"></div>
