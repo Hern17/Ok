@@ -28,7 +28,12 @@ from game_mechanics import (
 
 @app.template_filter("from_json")
 def from_json(value):
-    return json.loads(value) if value else []
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return []
 
 from db import get_db, init_db
 from auth import login_required, employer_required, login_user, register_user
@@ -154,6 +159,55 @@ def profile(username):
         is_employer_view=is_employer_view,
         quests_completed=completed,
     )
+@app.route("/profile/update-contact", methods=["POST"])
+@login_required
+def update_contact():
+    uid = session["user_id"]
+    
+    # Get form data
+    name = request.form.get("name", "")
+    email = request.form.get("email", "")
+    phone = request.form.get("phone", "")
+    location = request.form.get("location", "")
+    social_media_text = request.form.get("social_media", "")
+    
+    # Parse social media (one per line, filter out empty lines)
+    social_media = [s.strip() for s in social_media_text.split('\n') if s.strip()]
+    
+    conn = get_db()
+    
+    # Get existing cv_data
+    profile = conn.execute(
+        "SELECT cv_data FROM player_profiles WHERE user_id = ?", (uid,)
+    ).fetchone()
+    
+    cv_data = {}
+    if profile and profile["cv_data"]:
+        try:
+            cv_data = json.loads(profile["cv_data"])
+        except:
+            cv_data = {}
+    
+    # Update meta information
+    if "meta" not in cv_data:
+        cv_data["meta"] = {}
+    
+    cv_data["meta"]["name"] = name
+    cv_data["meta"]["email"] = email
+    cv_data["meta"]["phone"] = phone
+    cv_data["meta"]["location"] = location
+    cv_data["meta"]["social_media"] = social_media
+    
+    # Save back to database
+    conn.execute(
+        "UPDATE player_profiles SET cv_data = ? WHERE user_id = ?",
+        (json.dumps(cv_data), uid)
+    )
+    conn.commit()
+    conn.close()
+    
+    flash("Contact information updated successfully!", "success")
+    return redirect(url_for("profile", username=session["username"]))
 
 @app.route("/friends")
 @login_required
@@ -484,31 +538,13 @@ def quest_history():
 def serve_upload(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
-# ── Employer routes ──
+# ── Employer helper functions ──
 
 def _get_employer(uid):
     conn = get_db()
     emp = conn.execute("SELECT * FROM employers WHERE user_id = ?", (uid,)).fetchone()
     conn.close()
     return dict(emp) if emp else None
-
-def _candidate_skills_intersect(conn, candidate_id, employer_id):
-    """Check if candidate has skills matching any open job from employer."""
-    profile = conn.execute("SELECT skills FROM player_profiles WHERE user_id = ?", (candidate_id,)).fetchone()
-    if not profile:
-        return False
-    cand_skills = set(json.loads(profile["skills"]) if profile["skills"] else [])
-    if not cand_skills:
-        return False
-    jobs = conn.execute(
-        "SELECT skills_required FROM job_listings WHERE employer_id = ? AND status = 'open'",
-        (employer_id,),
-    ).fetchall()
-    for j in jobs:
-        req = set(json.loads(j["skills_required"]) if j["skills_required"] else [])
-        if req and cand_skills & req:
-            return True
-    return False
 
 def _relevant_candidates(conn, employer_id):
     """Return candidates whose skills intersect any open job's requirements."""
@@ -526,20 +562,37 @@ def _relevant_candidates(conn, employer_id):
     for c in candidates:
         if c["id"] in swiped:
             continue
-        cand_skills = set(json.loads(c["skills"]) if c["skills"] else [])
+        # Safe JSON parsing for candidate skills
+        cand_skills = set()
+        if c["skills"] and c["skills"].strip():
+            try:
+                cand_skills = set(json.loads(c["skills"]))
+            except json.JSONDecodeError:
+                cand_skills = set()
+        
         if not cand_skills:
             continue
+            
         jobs = conn.execute(
             "SELECT skills_required FROM job_listings WHERE employer_id = ? AND status = 'open'",
             (employer_id,),
         ).fetchall()
         for j in jobs:
-            req = set(json.loads(j["skills_required"]) if j["skills_required"] else [])
+            # Safe JSON parsing for job skills
+            req = set()
+            if j["skills_required"] and j["skills_required"].strip():
+                try:
+                    req = set(json.loads(j["skills_required"]))
+                except json.JSONDecodeError:
+                    req = set()
+                    
             if req and cand_skills & req:
                 match_pct = int(len(cand_skills & req) / len(req) * 100) if req else 0
                 result.append(dict(c) | {"match_pct": match_pct})
                 break
     return result
+
+# ── Employer routes ──
 
 @app.route("/employer")
 @login_required
@@ -568,11 +621,23 @@ def employer_dashboard():
 def employer_job_create():
     emp = _get_employer(session["user_id"])
     conn = get_db()
+    
+    # Get skills and ensure it's valid JSON
+    skills_input = request.form.get("skills", "[]").strip()
+    if not skills_input:
+        skills_input = "[]"
+    
+    # Validate it's proper JSON
+    try:
+        json.loads(skills_input)
+    except json.JSONDecodeError:
+        skills_input = "[]"
+    
     conn.execute(
         """INSERT INTO job_listings (employer_id, title, description, skills_required, location, salary_range)
         VALUES (?, ?, ?, ?, ?, ?)""",
         (emp["id"], request.form["title"], request.form.get("description", ""),
-         request.form.get("skills", "[]"), request.form.get("location", ""),
+         skills_input, request.form.get("location", ""),
          request.form.get("salary", "")),
     )
     conn.commit()
@@ -701,10 +766,13 @@ def employer_hire(candidate_id):
     )
     conn.commit()
     check_level_up(conn, candidate_id)
+    # Get job title for notification
+    job_title = conn.execute("SELECT title FROM job_listings WHERE id = ?", (job_id,)).fetchone()[0]
     conn.execute(
         """INSERT INTO notifications (user_id, message) VALUES (?, ?)""",
-        (candidate_id, f"🏆 Hired by {emp['company_name']} for {conn.execute('SELECT title FROM job_listings WHERE id = ?', (job_id,)).fetchone()[0]}. +500 XP!"),
+        (candidate_id, f"🏆 Hired by {emp['company_name']} for {job_title}. +500 XP!"),
     )
+    conn.commit()
     conn.close()
     flash("Candidate hired! +500 XP awarded.", "success")
     return redirect(url_for("employer_matches"))
@@ -827,3 +895,16 @@ def job_detail(job_id):
 
 if __name__ == "__main__":
     app.run(debug=True, host="127.0.0.1", port=5000)
+
+@app.route('/uploads/avatars/<filename>')
+def serve_avatar(filename):
+    return send_from_directory(AVATAR_FOLDER, filename)
+
+@app.route('/uploads/avatars/<filename>')
+def serve_avatar(filename):
+    return send_from_directory(AVATAR_FOLDER, filename)
+
+
+
+
+
