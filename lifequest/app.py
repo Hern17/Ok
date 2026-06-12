@@ -894,7 +894,9 @@ def job_detail(job_id):
     return render_template("job_detail.html", job=job, username=session["username"])
 
 if __name__ == "__main__":
-    app.run(debug=True, host="127.0.0.1", port=5000)
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=False, host="0.0.0.0", port=port)
 
 @app.route('/uploads/avatars/<filename>')
 def serve_avatar(filename):
@@ -903,6 +905,7 @@ def serve_avatar(filename):
 @app.route('/uploads/avatars/<filename>')
 def serve_avatar(filename):
     return send_from_directory(AVATAR_FOLDER, filename)
+
 
 
 
